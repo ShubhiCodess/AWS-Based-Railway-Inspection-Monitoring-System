@@ -1,3 +1,4 @@
+```python
 import sys
 import os
 
@@ -10,12 +11,12 @@ import cv2
 import uuid
 from collections import defaultdict
 from datetime import datetime
+from decimal import Decimal
 
 from fastapi import FastAPI
 from ultralytics import YOLO
 
 import boto3
-from decimal import Decimal
 
 
 app = FastAPI()
@@ -34,13 +35,12 @@ table = dynamodb.Table(
 )
 
 
-# -------------------------
-# CONFIG
-# -------------------------
-
 VALID_CLASSES = {
+
     0: "clipping",
+
     4: "seams",
+
     5: "sharp_rails"
 }
 
@@ -49,34 +49,34 @@ CONF_THRESHOLD = 0.4
 CLIPPING_ALERT_THRESHOLD = 15
 
 
-# -------------------------
-# ROUTES
-# -------------------------
-
 @app.get("/")
 def home():
 
     return {
-        "status": "running"
+
+        "status":
+        "running"
     }
 
 
 @app.post("/predict")
-async def predict(data: dict):
+async def predict(payload: dict):
 
     local_path = None
+
     output_path = None
 
     try:
 
-        bucket = data["bucket"]
-        key = data["key"]
+        bucket = payload["bucket"]
 
-        latitude = data.get(
+        key = payload["key"]
+
+        latitude = payload.get(
             "latitude"
         )
 
-        longitude = data.get(
+        longitude = payload.get(
             "longitude"
         )
 
@@ -96,34 +96,28 @@ async def predict(data: dict):
             f"processed/{detection_id}.jpg"
         )
 
-        # -------------------
-        # DOWNLOAD IMAGE
-        # -------------------
-
         s3.download_file(
+
             bucket,
+
             key,
+
             local_path
         )
-
-        # -------------------
-        # RUN MODEL
-        # -------------------
 
         results = model(
             local_path
         )
 
         summary = defaultdict(
+
             lambda: {
+
                 "count": 0,
+
                 "max_conf": 0
             }
         )
-
-        # -------------------
-        # FILTER + DRAW
-        # -------------------
 
         for r in results:
 
@@ -142,12 +136,17 @@ async def predict(data: dict):
                 )
 
                 if (
+
                     cls in VALID_CLASSES
+
                     and
+
                     conf >= CONF_THRESHOLD
                 ):
 
-                    keep.append(i)
+                    keep.append(
+                        i
+                    )
 
                     summary[
                         cls
@@ -160,11 +159,13 @@ async def predict(data: dict):
                     ][
                         "max_conf"
                     ] = max(
+
                         summary[
                             cls
                         ][
                             "max_conf"
                         ],
+
                         conf
                     )
 
@@ -175,17 +176,15 @@ async def predict(data: dict):
             )
 
             cv2.imwrite(
+
                 output_path,
+
                 annotated
             )
 
-        # -------------------
-        # CREATE OUTPUT
-        # -------------------
-
         detections = []
 
-        for cls, data in (
+        for cls, stats in (
             summary.items()
         ):
 
@@ -197,22 +196,26 @@ async def predict(data: dict):
                 ],
 
                 "count":
-                data[
+                stats[
                     "count"
                 ],
 
                 "max_confidence":
+
                 Decimal(
+
                     str(
+
                         round(
-                            data[
+
+                            stats[
                                 "max_conf"
                             ],
+
                             3
                         )
                     )
                 )
-
             })
 
         clipping_count = (
@@ -220,13 +223,13 @@ async def predict(data: dict):
         )
 
         alert = (
-            clipping_count >
+
+            clipping_count
+
+            >
+
             CLIPPING_ALERT_THRESHOLD
         )
-
-        # -------------------
-        # UPLOAD RESULT
-        # -------------------
 
         s3.upload_file(
 
@@ -236,10 +239,6 @@ async def predict(data: dict):
 
             processed_key
         )
-
-        # -------------------
-        # SAVE DYNAMODB
-        # -------------------
 
         item = {
 
@@ -257,33 +256,34 @@ async def predict(data: dict):
             processed_key,
 
             "latitude":
-            (
-                Decimal(
-                    str(
-                        latitude
-                    )
+
+            Decimal(
+                str(
+                    latitude
                 )
-                if latitude
-                else None
-            ),
+            )
+
+            if latitude
+
+            else None,
 
             "longitude":
-            (
-                Decimal(
-                    str(
-                        longitude
-                    )
+
+            Decimal(
+                str(
+                    longitude
                 )
-                if longitude
-                else None
-            ),
+            )
+
+            if longitude
+
+            else None,
 
             "detections":
             detections,
 
             "alert":
             alert
-
         }
 
         table.put_item(
@@ -297,7 +297,6 @@ async def predict(data: dict):
 
             "record":
             item
-
         }
 
     except Exception as e:
@@ -309,14 +308,16 @@ async def predict(data: dict):
 
             "message":
             str(e)
-
         }
 
     finally:
 
         if (
+
             local_path
+
             and
+
             os.path.exists(
                 local_path
             )
@@ -327,8 +328,11 @@ async def predict(data: dict):
             )
 
         if (
+
             output_path
+
             and
+
             os.path.exists(
                 output_path
             )
@@ -337,3 +341,99 @@ async def predict(data: dict):
             os.remove(
                 output_path
             )
+
+
+@app.post("/predict-folder")
+async def predict_folder(payload: dict):
+
+    try:
+
+        bucket = payload["bucket"]
+
+        prefix = payload["prefix"]
+
+        latitude = payload.get(
+            "latitude"
+        )
+
+        longitude = payload.get(
+            "longitude"
+        )
+
+        response = s3.list_objects_v2(
+
+            Bucket=bucket,
+
+            Prefix=prefix
+        )
+
+        processed = []
+
+        for obj in response.get(
+            "Contents",
+            []
+        ):
+
+            key = obj["Key"]
+
+            if key.endswith("/"):
+
+                continue
+
+            result = await predict({
+
+                "bucket":
+                bucket,
+
+                "key":
+                key,
+
+                "latitude":
+                latitude,
+
+                "longitude":
+                longitude
+            })
+
+            processed.append({
+
+                "image":
+                key,
+
+                "status":
+                result.get(
+                    "status"
+                ),
+
+                "message":
+                result.get(
+                    "message"
+                )
+            })
+
+        return {
+
+            "status":
+            "success",
+
+            "processed":
+            len(
+                processed
+            ),
+
+            "images":
+            processed
+        }
+
+    except Exception as e:
+
+        return {
+
+            "status":
+            "error",
+
+            "message":
+            str(e)
+        }
+```
+
